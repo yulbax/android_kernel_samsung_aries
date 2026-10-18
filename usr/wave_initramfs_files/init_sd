@@ -28,11 +28,39 @@ sd_part() {
 	local dev=$(busybox cat /sys/block/$sd_disk/${sd_disk}p$1/dev)
 	busybox mknod /dev/block/sd_p$1 b ${dev%%:*} ${dev##*:}
 }
-sd_part 2
-sd_part 3
 
-busybox mount -t ext4 /dev/block/sd_p3 /system
-busybox mount -t ext4 /dev/block/sd_p2 /cache
+conf_get() {
+	busybox sed -n "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*\([0-9][0-9]*\)[[:space:]]*\$/\1/p" /wave_sd.conf | busybox tail -n 1
+}
+
+part_cache=2
+part_system=3
+part_data=4
+part_storage=1
+
+sd_part 1
+busybox mkdir /sd_boot
+if busybox mount -t vfat -o ro /dev/block/sd_p1 /sd_boot ; then
+	if busybox test -f /sd_boot/wave_sd.conf ; then
+		busybox tr -d '\r' < /sd_boot/wave_sd.conf > /wave_sd.conf
+	fi
+	busybox umount /sd_boot
+fi
+busybox rmdir /sd_boot
+if busybox test -f /wave_sd.conf ; then
+	for key in cache system data storage ; do
+		value=$(conf_get $key)
+		busybox test -n "$value" && eval part_$key=$value
+	done
+	busybox rm /wave_sd.conf
+fi
+echo "SD partitions: cache $part_cache, system $part_system, data $part_data, storage $part_storage" > /dev/kmsg
+
+sd_part $part_cache
+sd_part $part_system
+
+busybox mount -t ext4 /dev/block/sd_p$part_system /system
+busybox mount -t ext4 /dev/block/sd_p$part_cache /cache
 
 image=/stage1/ramdisk.cpio
 
@@ -61,6 +89,23 @@ busybox umount /cache
 busybox umount /system
 
 busybox cpio -i < $image
+
+for f in /fstab.wave /fstab.wave2 /etc/recovery.fstab /etc/twrp.fstab ; do
+	busybox test -f $f || continue
+	busybox sed -i \
+		-e "s|/dev/block/wave_sd_cache|/dev/block/${sd_disk}p$part_cache|g" \
+		-e "s|/dev/block/wave_sd_system|/dev/block/${sd_disk}p$part_system|g" \
+		-e "s|/dev/block/wave_sd_data|/dev/block/${sd_disk}p$part_data|g" \
+		$f
+	if busybox test "$part_storage" = 0 ; then
+		busybox sed -i -e "/wave_sd_storage/d" $f
+	else
+		busybox sed -i \
+			-e "s|/dev/block/wave_sd_storage|/dev/block/${sd_disk}p$part_storage|g" \
+			-e "s|sdcard1:wave_sd_storage|sdcard1:$part_storage|g" \
+			$f
+	fi
+done
 
 busybox umount /sys
 busybox umount /proc
