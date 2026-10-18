@@ -41,6 +41,8 @@
 #include "modem_ctl.h"
 #include "modem_ctl_p.h"
 
+#define MODEM_RX_WAKELOCK_TIMEOUT	(2 * HZ)
+
 
 /* general purpose fifo access routines */
 
@@ -176,7 +178,8 @@ void modem_update_state(struct modemctl *mc)
 	mc->packet_tx.avail = fifo_space(&mc->packet_tx);
 	mc->packet_rx.avail = fifo_count(&mc->packet_rx);
 	if (mc->packet_rx.avail)
-		wake_lock(&mc->packet_pipe.wakelock);
+		wake_lock_timeout(&mc->packet_pipe.wakelock,
+				  MODEM_RX_WAKELOCK_TIMEOUT);
 	else
 		wake_unlock(&mc->packet_pipe.wakelock);
 
@@ -191,7 +194,7 @@ void modem_update_pipe(struct m_pipe *pipe)
 	pipe->tx->avail = fifo_space(pipe->tx);
 	pipe->rx->avail = fifo_count(pipe->rx);
 	if (pipe->rx->avail)
-		wake_lock(&pipe->wakelock);
+		wake_lock_timeout(&pipe->wakelock, MODEM_RX_WAKELOCK_TIMEOUT);
 	else
 		wake_unlock(&pipe->wakelock);
 	spin_unlock_irqrestore(&pipe->mc->lock, flags);
@@ -287,8 +290,6 @@ static int modem_pipe_recv(struct m_pipe *pipe, struct modem_io *io)
 
 	ret = modem_pipe_read(pipe, io);
 
-	modem_update_pipe(pipe);
-
 	if ((ret != 0) && (ret != -EAGAIN)) {
 		pr_err("[MODEM] purging %s fifo\n", pipe->dev.name);
 		fifo_purge(pipe->rx);
@@ -296,6 +297,8 @@ static int modem_pipe_recv(struct m_pipe *pipe, struct modem_io *io)
 	} else if (ret == 0) {
 		MODEM_COUNT(pipe->mc, pipe_rx);
 	}
+
+	modem_update_pipe(pipe);
 
 	modem_release_mmio(pipe->mc, 0);
 
@@ -351,7 +354,7 @@ static long pipe_ioctl(struct file *filp, unsigned int cmd, unsigned long _arg)
 		ret = modem_pipe_send(pipe, &mio);
 		mutex_unlock(&pipe->tx_lock);
 		if(ret)
-			return -EFAULT;
+			return ret;
 		break;
 	case IOCTL_MODEM_RECV:
 		if (copy_from_user(&mio, arg, sizeof(mio)) != 0)
@@ -369,7 +372,7 @@ static long pipe_ioctl(struct file *filp, unsigned int cmd, unsigned long _arg)
 		if (copy_to_user(arg, &mio, sizeof(mio)) != 0)
 			return -EFAULT;
 		if(ret)
-			return -EFAULT;
+			return ret;
 		break;
 	default:
 		return -EINVAL;
