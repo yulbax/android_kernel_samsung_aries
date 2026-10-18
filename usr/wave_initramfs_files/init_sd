@@ -1,0 +1,72 @@
+#!/stage1/busybox sh
+echo "OHAI, stage1 init (SD) starting" > /dev/kmsg
+export _PATH="$PATH"
+export PATH=/stage1
+
+sd_host=/sys/devices/platform/s3c-sdhci.2/mmc_host/mmc2
+
+busybox cd /
+busybox date >>boot.txt
+exec >>boot.txt 2>&1
+busybox rm init
+busybox mount -t proc proc /proc
+busybox mount -t sysfs sysfs /sys
+
+sd_disk=""
+while busybox test -z "$sd_disk" ; do
+	for b in $sd_host/mmc2:*/block/* ; do
+		busybox test -e "$b/dev" && sd_disk=$(busybox basename "$b")
+	done
+	if busybox test -z "$sd_disk" ; then
+		echo "Waiting for the SD card..." > /dev/kmsg
+		busybox sleep 1
+	fi
+done
+echo "SD card is $sd_disk"
+
+sd_part() {
+	local dev=$(busybox cat /sys/block/$sd_disk/${sd_disk}p$1/dev)
+	busybox mknod /dev/block/sd_p$1 b ${dev%%:*} ${dev##*:}
+}
+sd_part 2
+sd_part 3
+
+busybox mount -t ext4 /dev/block/sd_p3 /system
+busybox mount -t ext4 /dev/block/sd_p2 /cache
+
+image=/stage1/ramdisk.cpio
+
+if busybox test -e /cache/.startrecovery ||
+    busybox grep -q recovery /proc/cmdline ||
+	busybox grep -q bootmode=2 /proc/cmdline || # normal mode
+	busybox grep -q bootmode=5 /proc/cmdline || # big mem
+	busybox grep -q bootmode=9 /proc/cmdline; then # no cam
+
+	# recovery boot
+	busybox rm -fr /cache/.startrecovery
+	image=/stage1/ramdisk-recovery.cpio
+
+	# disable lpm
+	busybox echo 0 > /sys/class/power_supply/battery/charging_mode_booting
+elif ! busybox test -e /system/build.prop; then
+	busybox mkdir -p /cache/recovery
+
+	image=/stage1/ramdisk-recovery.cpio
+
+	# disable lpm
+	busybox echo 0 > /sys/class/power_supply/battery/charging_mode_booting
+fi
+
+busybox umount /cache
+busybox umount /system
+
+busybox cpio -i < $image
+
+busybox umount /sys
+busybox umount /proc
+busybox date >>boot.txt
+echo "stage1 log:" > /dev/kmsg
+busybox cat boot.txt > /dev/kmsg
+busybox rm -fr /stage1 /dev/*
+export PATH="${_PATH}"
+exec /init
