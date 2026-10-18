@@ -12,21 +12,65 @@ busybox rm init
 busybox mount -t proc proc /proc
 busybox mount -t sysfs sysfs /sys
 
+echo "cmdline: $(busybox cat /proc/cmdline)"
+
+mknod_dev() {
+	local dev=$(busybox cat $1/dev)
+	busybox mknod $2 b ${dev%%:*} ${dev##*:}
+}
+
+has_boot_img() {
+	local found=1
+	busybox test -e /sys/block/$1/${1}p1/dev || return 1
+	mknod_dev /sys/block/$1/${1}p1 /dev/block/probe_p1
+	busybox mkdir -p /probe
+	if busybox mount -t vfat -o ro /dev/block/probe_p1 /probe ; then
+		busybox test -f /probe/boot.img && found=0
+		busybox umount /probe
+	fi
+	busybox rm -f /dev/block/probe_p1
+	busybox rmdir /probe
+	return $found
+}
+
 sd_disk=""
+tries=0
 while busybox test -z "$sd_disk" ; do
 	for b in $sd_host/mmc2:*/block/* ; do
 		busybox test -e "$b/dev" && sd_disk=$(busybox basename "$b")
 	done
+	if busybox test -z "$sd_disk" -a $tries -ge 15 ; then
+		for b in /sys/block/mmcblk* ; do
+			disk=$(busybox basename $b)
+			busybox readlink -f $b | busybox grep -q s3c-sdhci.0 && continue
+			has_boot_img $disk && sd_disk=$disk && echo "found the card by its boot.img"
+		done
+	fi
 	if busybox test -z "$sd_disk" ; then
+		if busybox test $tries = 15 ; then
+			echo "no card under $sd_host, block devices:"
+			for b in /sys/block/* ; do echo "  $b -> $(busybox readlink -f $b)" ; done
+			busybox ls -R /sys/devices/platform/s3c-sdhci.2 | busybox head -n 40
+		fi
 		echo "Waiting for the SD card..." > /dev/kmsg
+		tries=$((tries + 1))
 		busybox sleep 1
 	fi
 done
-echo "SD card is $sd_disk"
+echo "SD card is $sd_disk after $tries s"
 
 sd_part() {
-	local dev=$(busybox cat /sys/block/$sd_disk/${sd_disk}p$1/dev)
-	busybox mknod /dev/block/sd_p$1 b ${dev%%:*} ${dev##*:}
+	mknod_dev /sys/block/$sd_disk/${sd_disk}p$1 /dev/block/sd_p$1
+}
+
+save_log() {
+	echo "--- $1"
+	busybox mkdir -p /sd_boot
+	if busybox mount -t vfat /dev/block/sd_p1 /sd_boot ; then
+		busybox cp boot.txt /sd_boot/wave_sd.log
+		busybox umount /sd_boot
+	fi
+	busybox rmdir /sd_boot
 }
 
 conf_get() {
@@ -39,6 +83,7 @@ part_data=4
 part_storage=1
 
 sd_part 1
+save_log "card found"
 busybox mkdir /sd_boot
 if busybox mount -t vfat -o ro /dev/block/sd_p1 /sd_boot ; then
 	if busybox test -f /sd_boot/wave_sd.conf ; then
@@ -59,6 +104,7 @@ echo "SD partitions: cache $part_cache, system $part_system, data $part_data, st
 sd_part $part_cache
 sd_part $part_system
 
+save_log "mounting system and cache"
 busybox mount -t ext4 /dev/block/sd_p$part_system /system
 busybox mount -t ext4 /dev/block/sd_p$part_cache /cache
 
@@ -85,6 +131,10 @@ elif ! busybox test -e /system/build.prop; then
 	busybox echo 0 > /sys/class/power_supply/battery/charging_mode_booting
 fi
 
+echo "image: $image"
+busybox grep -E " /(system|cache) " /proc/mounts
+busybox ls /sys/block/$sd_disk
+
 busybox umount /cache
 busybox umount /system
 
@@ -107,9 +157,11 @@ for f in /fstab.wave /fstab.wave2 /etc/recovery.fstab /etc/twrp.fstab ; do
 	fi
 done
 
+busybox date >>boot.txt
+save_log "starting $image"
+
 busybox umount /sys
 busybox umount /proc
-busybox date >>boot.txt
 echo "stage1 log:" > /dev/kmsg
 busybox cat boot.txt > /dev/kmsg
 busybox rm -fr /stage1 /dev/*
