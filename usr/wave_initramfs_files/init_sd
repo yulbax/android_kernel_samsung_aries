@@ -80,7 +80,7 @@ conf_get() {
 part_cache=2
 part_system=3
 part_data=4
-part_storage=1
+part_storage=0
 
 sd_part 1
 save_log "card found"
@@ -98,6 +98,10 @@ if busybox test -f /wave_sd.conf ; then
 		busybox test -n "$value" && eval part_$key=$value
 	done
 	busybox rm /wave_sd.conf
+fi
+if busybox test "$part_storage" = 1 ; then
+	echo "storage=1 is the boot.img partition, it is /boot only, no storage" > /dev/kmsg
+	part_storage=0
 fi
 echo "SD partitions: cache $part_cache, system $part_system, data $part_data, storage $part_storage" > /dev/kmsg
 
@@ -140,13 +144,14 @@ busybox umount /system
 
 busybox cpio -i < $image
 
-for f in /fstab.wave /fstab.wave2 /etc/recovery.fstab /etc/twrp.fstab ; do
+for f in /fstab.wave /fstab.wave2 /etc/recovery.fstab /etc/twrp.fstab /init.wave.storage.rc ; do
 	busybox test -f $f || continue
 	busybox sed -i \
 		-e "s|/dev/block/wave_sd_cache|/dev/block/${sd_disk}p$part_cache|g" \
 		-e "s|/dev/block/wave_sd_system|/dev/block/${sd_disk}p$part_system|g" \
 		-e "s|/dev/block/wave_sd_data|/dev/block/${sd_disk}p$part_data|g" \
 		$f
+	busybox sed -i -e "s|/dev/block/wave_sd_boot|/dev/block/${sd_disk}p1|g" $f
 	if busybox test "$part_storage" = 0 ; then
 		busybox sed -i -e "/wave_sd_storage/d" $f
 	else
