@@ -2656,6 +2656,10 @@ static void wm8994_set_gsm_voicecall_common_setting(struct snd_soc_codec *codec)
 	struct wm8994_priv *wm8994 = snd_soc_codec_get_drvdata(codec);
 #endif
 
+#ifdef CONFIG_MACH_WAVE
+	wm8994_write(codec, WM8994_AIF2_ADC_FILTERS, 0x0000);
+#endif
+
 	/* GPIO Configuration */
 	wm8994_write(codec, WM8994_GPIO_1, 0xA101);
 	wm8994_write(codec, WM8994_GPIO_2, 0x8100);
@@ -3548,6 +3552,11 @@ void wm8994_set_voicecall_speaker(struct snd_soc_codec *codec)
 	wm8994_write(codec, WM8994_AIF2_CONTROL_2, incall_boost_spk);
 	wm8994_set_codec_gain(codec, VOICECALL_MODE, VOICECALL_SPK);
 	update_mic_gain(incall_mic_gain_spk);
+#ifdef CONFIG_MACH_WAVE
+	wm8994_write(codec, WM8994_AIF2_ADC_FILTERS,
+		     (3 << WM8994_AIF2ADC_HPF_CUT_SHIFT) |
+		     WM8994_AIF2ADCL_HPF | WM8994_AIF2ADCR_HPF);
+#endif
 
 	/* Unmute DAC1 left */
 	val = wm8994_read(codec, WM8994_DAC1_LEFT_VOLUME);
