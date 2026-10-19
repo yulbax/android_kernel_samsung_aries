@@ -1220,7 +1220,11 @@ static int __devinit tl2796_probe(struct spi_device *spi)
 
 	lcd->g_spi = spi;
 	lcd->dev = &spi->dev;
+#ifdef CONFIG_MACH_WAVE
+	lcd->bl = 255;
+#else
 	lcd->bl = 128; // half of max brightness
+#endif
 	for (c = 0; c < 3; c++)
 		lcd->color_mult[c] = 0xffffffff;
 
