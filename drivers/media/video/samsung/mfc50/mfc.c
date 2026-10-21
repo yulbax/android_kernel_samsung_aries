@@ -78,12 +78,21 @@ static int mfc_open(struct inode *inode, struct file *file)
 	mutex_lock(&mfc_mutex);
 
 	if (!mfc_is_running()) {
+		ret = s5p_media_get(S5P_MDEV_MFC, 0);
+		if (ret)
+			goto err_open;
+		ret = s5p_media_get(S5P_MDEV_MFC, 1);
+		if (ret) {
+			s5p_media_put(S5P_MDEV_MFC, 0);
+			goto err_open;
+		}
+
 		/* Turn on mfc power domain regulator */
 		ret = regulator_enable(mfc_pd_regulator);
 		if (ret < 0) {
 			mfc_err("MFC_RET_POWER_ENABLE_FAIL\n");
 			ret = -EINVAL;
-			goto err_open;
+			goto err_memory;
 		}
 
 #ifdef CONFIG_DVFS_LIMIT
@@ -145,9 +154,13 @@ err_regulator:
 		s5pv210_unlock_dvfs_high_level(DVFS_LOCK_TOKEN_1);
 #endif
 		/* Turn off mfc power domain regulator */
-		ret = regulator_disable(mfc_pd_regulator);
-		if (ret < 0)
+		if (regulator_disable(mfc_pd_regulator) < 0)
 			mfc_err("MFC_RET_POWER_DISABLE_FAIL\n");
+	}
+err_memory:
+	if (!mfc_is_running()) {
+		s5p_media_put(S5P_MDEV_MFC, 1);
+		s5p_media_put(S5P_MDEV_MFC, 0);
 	}
 err_open:
 	mutex_unlock(&mfc_mutex);
@@ -189,6 +202,9 @@ static int mfc_release(struct inode *inode, struct file *file)
 #ifdef CONFIG_DVFS_LIMIT
 		s5pv210_unlock_dvfs_high_level(DVFS_LOCK_TOKEN_1);
 #endif
+		s5p_media_put(S5P_MDEV_MFC, 1);
+		s5p_media_put(S5P_MDEV_MFC, 0);
+
 		/* Turn off mfc power domain regulator */
 		ret = regulator_disable(mfc_pd_regulator);
 		if (ret < 0) {

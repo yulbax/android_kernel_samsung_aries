@@ -183,6 +183,18 @@ config COMPACTION
 	help
 	  Allows the compaction of memory for the allocation of huge pages.
 
+config CMA
+	bool "Contiguous Memory Allocator"
+	depends on MMU && HAVE_MEMBLOCK
+	select COMPACTION
+	select MIGRATION
+	help
+	  Lets the page allocator hand out the memory reserved for devices
+	  to movable allocations while the devices don't use it, and moves
+	  those pages away when a device wants its range back.
+
+	  The memory reserving code of the platform has to support it.
+
 #
 # support for page migration
 #

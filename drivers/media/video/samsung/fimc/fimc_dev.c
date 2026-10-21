@@ -996,6 +996,14 @@ static int fimc_open(struct file *filp)
 	}
 	in_use = atomic_read(&ctrl->in_use);
 
+	if (in_use == 1) {
+		ret = s5p_media_get(ctrl->id, 1);
+		if (ret) {
+			atomic_dec(&ctrl->in_use);
+			goto resource_busy;
+		}
+	}
+
 	prv_data = kzalloc(sizeof(struct fimc_prv_data), GFP_KERNEL);
 	if (!prv_data) {
 		fimc_err("%s: not enough memory\n", __func__);
@@ -1058,6 +1066,8 @@ ctx_err:
 	kfree(prv_data);
 
 kzalloc_err:
+	if (in_use == 1)
+		s5p_media_put(ctrl->id, 1);
 	atomic_dec(&ctrl->in_use);
 
 resource_busy:
@@ -1204,6 +1214,10 @@ static int fimc_release(struct file *filp)
 			filp->private_data = NULL;
 		}
 	}
+
+	if (atomic_read(&ctrl->in_use) == 0)
+		s5p_media_put(ctrl->id, 1);
+
 #if defined(CONFIG_MACH_ARIES) || defined(CONFIG_MACH_WAVE)
 	/*
 	 * it remain afterimage when I play movie using overlay and exit

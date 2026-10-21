@@ -22,6 +22,10 @@ struct s5p_media_device {
 	u32		bank;
 	size_t		memsize;
 	dma_addr_t	paddr;
+#ifdef CONFIG_S5P_MEDIA_CMA
+	size_t		cma_size;
+	int		users;
+#endif
 };
 
 extern struct meminfo meminfo;
@@ -29,6 +33,20 @@ extern dma_addr_t s5p_get_media_memory_bank(int dev_id, int bank);
 extern size_t s5p_get_media_memsize_bank(int dev_id, int bank);
 extern dma_addr_t s5p_get_media_membase_bank(int bank);
 extern void s5p_reserve_bootmem(struct s5p_media_device *mdevs, int nr_mdevs, size_t boundary);
+
+#ifdef CONFIG_S5P_MEDIA_CMA
+extern int s5p_media_get(int dev_id, int bank);
+extern void s5p_media_put(int dev_id, int bank);
+#else
+static inline int s5p_media_get(int dev_id, int bank)
+{
+	return 0;
+}
+
+static inline void s5p_media_put(int dev_id, int bank)
+{
+}
+#endif
 
 #endif
 

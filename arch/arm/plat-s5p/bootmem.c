@@ -14,7 +14,12 @@
 #include <linux/memblock.h>
 #include <linux/mm.h>
 #include <linux/swap.h>
+#include <linux/gfp.h>
+#include <linux/mutex.h>
+#include <linux/delay.h>
+#include <linux/jiffies.h>
 #include <asm/setup.h>
+#include <asm/cacheflush.h>
 #include <linux/io.h>
 #include <mach/memory.h>
 #include <plat/media.h>
@@ -24,6 +29,16 @@ static struct s5p_media_device *media_devs;
 static int nr_media_devs;
 
 static dma_addr_t media_base[NR_BANKS];
+
+#ifdef CONFIG_S5P_MEDIA_CMA
+#define MEDIA_CMA_ALIGN		(PAGE_SIZE << (MAX_ORDER - 1))
+
+static bool s5p_media_shared(struct s5p_media_device *mdev)
+{
+	return mdev->id == S5P_MDEV_MFC || mdev->id == S5P_MDEV_FIMC0 ||
+		mdev->id == S5P_MDEV_FIMC2;
+}
+#endif
 
 static struct s5p_media_device *s5p_get_media_device(int dev_id, int bank)
 {
@@ -114,16 +129,33 @@ void s5p_reserve_bootmem(struct s5p_media_device *mdevs,
 			mdev->paddr = mfc_paddr;
 		else
 		if (!mdev->paddr) {
+			size_t size = mdev->memsize;
+			size_t align = PAGE_SIZE;
+
 			start = meminfo.bank[mdev->bank].start;
 			end = start + meminfo.bank[mdev->bank].size;
 
 			if (boundary && (boundary < end - start))
 				start = end - boundary;
 
+#ifdef CONFIG_S5P_MEDIA_CMA
+			if (s5p_media_shared(mdev)) {
+				size = ALIGN(size, MEDIA_CMA_ALIGN);
+				align = MEDIA_CMA_ALIGN;
+			}
+#endif
 			mdev->paddr = memblock_find_in_range(start, end,
-						mdev->memsize, PAGE_SIZE);
+						size, align);
 		}
 
+#ifdef CONFIG_S5P_MEDIA_CMA
+		if (s5p_media_shared(mdev)) {
+			mdev->cma_size = ALIGN(mdev->memsize, MEDIA_CMA_ALIGN);
+			ret = memblock_reserve(mdev->paddr, mdev->cma_size);
+		} else if (mdev->id == S5P_MDEV_JPEG)
+			ret = 0;
+		else
+#endif
 		ret = memblock_remove(mdev->paddr, mdev->memsize);
 		if (ret < 0)
 			pr_err("memblock_reserve(%x, %x) failed\n",
@@ -141,6 +173,126 @@ void s5p_reserve_bootmem(struct s5p_media_device *mdevs,
 			mdev->bank, media_base[mdev->bank]);
 	}
 }
+
+#ifdef CONFIG_S5P_MEDIA_CMA
+static DEFINE_MUTEX(s5p_media_cma_lock);
+
+static struct s5p_media_device *s5p_media_cma_device(int dev_id, int bank)
+{
+	struct s5p_media_device *mdev;
+
+	if (dev_id == S5P_MDEV_JPEG) {
+		dev_id = S5P_MDEV_MFC;
+		bank = 0;
+	}
+
+	mdev = s5p_get_media_device(dev_id, bank);
+	if (!mdev || !mdev->cma_size)
+		return NULL;
+
+	return mdev;
+}
+
+int s5p_media_get(int dev_id, int bank)
+{
+	struct s5p_media_device *mdev = s5p_media_cma_device(dev_id, bank);
+	unsigned long pfn, start = jiffies;
+	unsigned int ms;
+	int ret = 0, tries = 0;
+	void *vaddr;
+
+	if (!mdev)
+		return 0;
+
+	mutex_lock(&s5p_media_cma_lock);
+
+	if (mdev->users++)
+		goto out;
+
+	pfn = __phys_to_pfn(mdev->paddr);
+	while ((ret = alloc_contig_range(pfn, pfn +
+			(mdev->cma_size >> PAGE_SHIFT), MIGRATE_CMA))) {
+		if (ret == -EINTR || ++tries == 5)
+			break;
+		msleep(20);
+	}
+
+	ms = jiffies_to_msecs(jiffies - start);
+	if (ret) {
+		mdev->users--;
+		pr_err("s5p: %s can't get its %u KB back: %d, %u ms\n",
+			mdev->name, mdev->cma_size >> 10, ret, ms);
+		goto out;
+	}
+
+	vaddr = phys_to_virt(mdev->paddr);
+	dmac_flush_range(vaddr, vaddr + mdev->cma_size);
+	outer_flush_range(mdev->paddr, mdev->paddr + mdev->cma_size);
+
+	if (ms >= 100)
+		pr_info("s5p: %s got its %u KB back in %u ms\n",
+			mdev->name, mdev->cma_size >> 10, ms);
+out:
+	mutex_unlock(&s5p_media_cma_lock);
+	return ret;
+}
+EXPORT_SYMBOL(s5p_media_get);
+
+void s5p_media_put(int dev_id, int bank)
+{
+	struct s5p_media_device *mdev = s5p_media_cma_device(dev_id, bank);
+
+	if (!mdev)
+		return;
+
+	mutex_lock(&s5p_media_cma_lock);
+	if (WARN_ON(mdev->users <= 0))
+		goto out;
+	if (!--mdev->users)
+		free_contig_range(__phys_to_pfn(mdev->paddr),
+				  mdev->cma_size >> PAGE_SHIFT);
+out:
+	mutex_unlock(&s5p_media_cma_lock);
+}
+EXPORT_SYMBOL(s5p_media_put);
+
+static int __init s5p_media_cma_init(void)
+{
+	struct s5p_media_device *mdev;
+	unsigned long base_pfn, pfn, i;
+	struct zone *zone;
+	int n;
+
+	for (n = 0; n < nr_media_devs; n++) {
+		mdev = &media_devs[n];
+		if (!mdev->cma_size)
+			continue;
+
+		base_pfn = __phys_to_pfn(mdev->paddr);
+		zone = page_zone(pfn_to_page(base_pfn));
+		for (pfn = base_pfn; pfn < base_pfn +
+				(mdev->cma_size >> PAGE_SHIFT); pfn++)
+			if (!pfn_valid(pfn) || page_zone(pfn_to_page(pfn)) != zone)
+				break;
+		if (pfn < base_pfn + (mdev->cma_size >> PAGE_SHIFT)) {
+			pr_err("s5p: %s range 0x%08x is not one zone, kept\n",
+				mdev->name, mdev->paddr);
+			mdev->cma_size = 0;
+			continue;
+		}
+
+		for (i = 0; i < mdev->cma_size >> PAGE_SHIFT;
+				i += pageblock_nr_pages)
+			init_cma_reserved_pageblock(pfn_to_page(base_pfn + i));
+
+		pr_info("s5p: %u KB of %s at 0x%08x lent to the system\n",
+			mdev->cma_size >> 10, mdev->name, mdev->paddr);
+	}
+
+	return 0;
+}
+core_initcall(s5p_media_cma_init);
+#endif
 
 /* FIXME: temporary implementation to avoid compile error */
 int dma_needs_bounce(struct device *dev, dma_addr_t addr, size_t size)
