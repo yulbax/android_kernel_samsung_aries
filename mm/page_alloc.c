@@ -1065,6 +1065,19 @@ static struct page *__rmqueue(struct zone *zone, unsigned int order,
 {
 	struct page *page;
 
+#ifdef CONFIG_CMA
+	if (migratetype == MIGRATE_MOVABLE &&
+	    zone_page_state(zone, NR_FREE_CMA_PAGES) >
+	    zone_page_state(zone, NR_FREE_PAGES) / 2) {
+		page = __rmqueue_smallest(zone, order, MIGRATE_CMA);
+		if (page) {
+			trace_mm_page_alloc_zone_locked(page, order,
+							MIGRATE_CMA);
+			return page;
+		}
+	}
+#endif
+
 retry_reserve:
 	page = __rmqueue_smallest(zone, order, migratetype);
 
