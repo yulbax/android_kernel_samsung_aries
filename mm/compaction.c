@@ -19,6 +19,16 @@
 #define CREATE_TRACE_POINTS
 #include <trace/events/compaction.h>
 
+static void map_pages(struct list_head *list)
+{
+	struct page *page;
+
+	list_for_each_entry(page, list, lru) {
+		arch_alloc_page(page, 0);
+		kernel_map_pages(page, 1, 1);
+	}
+}
+
 static unsigned long release_freepages(struct list_head *freelist)
 {
 	struct page *page, *next;
@@ -190,16 +200,6 @@ static bool suitable_migration_target(struct page *page)
 
 	/* Otherwise skip the block */
 	return false;
-}
-
-static void map_pages(struct list_head *list)
-{
-	struct page *page;
-
-	list_for_each_entry(page, list, lru) {
-		arch_alloc_page(page, 0);
-		kernel_map_pages(page, 1, 1);
-	}
 }
 
 /*
