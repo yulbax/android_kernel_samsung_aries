@@ -112,6 +112,11 @@ size of the disk when not in use so a huge zram is wasteful.
 		compr_data_size
 		mem_used_total
 		mem_used_max
+		num_migrated
+
+	num_migrated is the number of zsmalloc pages freed by compaction.
+	The pool compacts itself under memory pressure; to compact it now:
+		echo 1 > /sys/block/zram0/compact
 
 8) Deactivate:
 	swapoff /dev/zram0
