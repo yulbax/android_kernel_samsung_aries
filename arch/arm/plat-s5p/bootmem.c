@@ -15,6 +15,7 @@
 #include <linux/mm.h>
 #include <linux/swap.h>
 #include <linux/gfp.h>
+#include <linux/fs.h>
 #include <linux/mutex.h>
 #include <linux/delay.h>
 #include <linux/jiffies.h>
@@ -212,16 +213,41 @@ int s5p_media_get(int dev_id, int bank)
 	pfn = __phys_to_pfn(mdev->paddr);
 	while ((ret = alloc_contig_range(pfn, pfn +
 			(mdev->cma_size >> PAGE_SHIFT), MIGRATE_CMA))) {
-		if (ret == -EINTR || ++tries == 5)
+		if (ret == -EINTR ||
+		    time_after(jiffies, start + msecs_to_jiffies(1500)))
 			break;
-		msleep(20);
+		tries++;
+		msleep(50);
 	}
 
 	ms = jiffies_to_msecs(jiffies - start);
 	if (ret) {
+		unsigned long i, busy = 0;
+
 		mdev->users--;
 		pr_err("s5p: %s can't get its %u KB back: %d, %u ms\n",
 			mdev->name, mdev->cma_size >> 10, ret, ms);
+		for (i = 0; i < mdev->cma_size >> PAGE_SHIFT; i++) {
+			struct page *page = pfn_to_page(pfn + i);
+			struct address_space *mapping;
+
+			if (PageBuddy(page) || !page_count(page))
+				continue;
+			if (busy++ >= 8)
+				continue;
+			mapping = page_mapping(page);
+			pr_err("s5p: pfn %lx flags %lx count %d mapcount %d "
+				"lru %d %s ino %lu readpage %pf migrate %pf\n",
+				pfn + i, page->flags, page_count(page),
+				page_mapcount(page), PageLRU(page),
+				mapping && mapping->host ?
+					mapping->host->i_sb->s_type->name : "-",
+				mapping && mapping->host ?
+					mapping->host->i_ino : 0,
+				mapping ? mapping->a_ops->readpage : NULL,
+				mapping ? mapping->a_ops->migratepage : NULL);
+		}
+		pr_err("s5p: %lu pages in use\n", busy);
 		goto out;
 	}
 
@@ -230,8 +256,8 @@ int s5p_media_get(int dev_id, int bank)
 	outer_flush_range(mdev->paddr, mdev->paddr + mdev->cma_size);
 
 	if (ms >= 100)
-		pr_info("s5p: %s got its %u KB back in %u ms\n",
-			mdev->name, mdev->cma_size >> 10, ms);
+		pr_info("s5p: %s got its %u KB back in %u ms, %d retries\n",
+			mdev->name, mdev->cma_size >> 10, ms, tries);
 out:
 	mutex_unlock(&s5p_media_cma_lock);
 	return ret;
