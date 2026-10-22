@@ -168,6 +168,37 @@ static ssize_t mem_used_max_show(struct device *dev,
 	return scnprintf(buf, PAGE_SIZE, "%llu\n", val << PAGE_SHIFT);
 }
 
+static ssize_t compact_store(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t len)
+{
+	struct zram *zram = dev_to_zram(dev);
+
+	down_read(&zram->init_lock);
+	if (!init_done(zram)) {
+		up_read(&zram->init_lock);
+		return -EINVAL;
+	}
+
+	zs_compact(zram->meta->mem_pool);
+	up_read(&zram->init_lock);
+
+	return len;
+}
+
+static ssize_t num_migrated_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	struct zs_pool_stats pool_stats = { 0 };
+	struct zram *zram = dev_to_zram(dev);
+
+	down_read(&zram->init_lock);
+	if (init_done(zram))
+		zs_pool_stats(zram->meta->mem_pool, &pool_stats);
+	up_read(&zram->init_lock);
+
+	return scnprintf(buf, PAGE_SIZE, "%lu\n", pool_stats.pages_compacted);
+}
+
 static ssize_t mem_used_max_store(struct device *dev,
 		struct device_attribute *attr, const char *buf, size_t len)
 {
@@ -315,7 +346,7 @@ static void zram_meta_free(struct zram_meta *meta)
 	kfree(meta);
 }
 
-static struct zram_meta *zram_meta_alloc(u64 disksize)
+static struct zram_meta *zram_meta_alloc(char *pool_name, u64 disksize)
 {
 	size_t num_pages;
 	struct zram_meta *meta = kmalloc(sizeof(*meta), GFP_KERNEL);
@@ -329,7 +360,7 @@ static struct zram_meta *zram_meta_alloc(u64 disksize)
 		goto free_meta;
 	}
 
-	meta->mem_pool = zs_create_pool(GFP_NOIO | __GFP_HIGHMEM);
+	meta->mem_pool = zs_create_pool(pool_name, GFP_NOIO | __GFP_HIGHMEM);
 	if (!meta->mem_pool) {
 		pr_err("Error creating memory pool\n");
 		goto free_table;
@@ -767,7 +798,7 @@ static ssize_t disksize_store(struct device *dev,
 		return -EINVAL;
 
 	disksize = PAGE_ALIGN(disksize);
-	meta = zram_meta_alloc(disksize);
+	meta = zram_meta_alloc(zram->disk->disk_name, disksize);
 	if (!meta)
 		return -ENOMEM;
 
@@ -959,6 +990,8 @@ static DEVICE_ATTR(mem_limit, S_IRUGO | S_IWUSR, mem_limit_show,
 		mem_limit_store);
 static DEVICE_ATTR(mem_used_max, S_IRUGO | S_IWUSR, mem_used_max_show,
 		mem_used_max_store);
+static DEVICE_ATTR(compact, S_IWUSR, NULL, compact_store);
+static DEVICE_ATTR(num_migrated, S_IRUGO, num_migrated_show, NULL);
 static DEVICE_ATTR(max_comp_streams, S_IRUGO | S_IWUSR,
 		max_comp_streams_show, max_comp_streams_store);
 static DEVICE_ATTR(comp_algorithm, S_IRUGO | S_IWUSR,
@@ -989,6 +1022,8 @@ static struct attribute *zram_disk_attrs[] = {
 	&dev_attr_mem_used_total.attr,
 	&dev_attr_mem_limit.attr,
 	&dev_attr_mem_used_max.attr,
+	&dev_attr_compact.attr,
+	&dev_attr_num_migrated.attr,
 	&dev_attr_max_comp_streams.attr,
 	&dev_attr_comp_algorithm.attr,
 	NULL,
