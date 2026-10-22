@@ -13,6 +13,7 @@
 #include <linux/kernel.h>
 #include <linux/types.h>
 #include <linux/init.h>
+#include <linux/memblock.h>
 #include <linux/serial_core.h>
 #include <linux/gpio.h>
 #include <linux/gpio_event.h>
@@ -4365,6 +4366,23 @@ static void check_bigmem(void) {
 	}
 }
 
+#define WAVE_BOOTFB_PHYS	0x4FA00000
+#define WAVE_BOOTFB_SIZE	PAGE_ALIGN(480 * 800 * 2)
+
+phys_addr_t wave_bootfb_phys;
+unsigned long wave_bootfb_size;
+
+static void __init wave_reserve_bootfb(void)
+{
+	if (!memblock_is_region_memory(WAVE_BOOTFB_PHYS, WAVE_BOOTFB_SIZE) ||
+	    memblock_is_region_reserved(WAVE_BOOTFB_PHYS, WAVE_BOOTFB_SIZE))
+		return;
+	if (memblock_reserve(WAVE_BOOTFB_PHYS, WAVE_BOOTFB_SIZE))
+		return;
+	wave_bootfb_phys = WAVE_BOOTFB_PHYS;
+	wave_bootfb_size = WAVE_BOOTFB_SIZE;
+}
+
 static void __init wave_map_io(void)
 {
 	s5p_init_io(NULL, 0, S5P_VA_CHIPID);
@@ -4375,6 +4393,7 @@ static void __init wave_map_io(void)
 		s5p_set_timer_source(S5P_PWM3, S5P_PWM4);
 	#endif
 	check_bigmem();
+	wave_reserve_bootfb();
 	s5p_reserve_bootmem(wave_media_devs,
 		ARRAY_SIZE(wave_media_devs), S5P_RANGE_MFC);
 #ifdef CONFIG_MTD_ONENAND

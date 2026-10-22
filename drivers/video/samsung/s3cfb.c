@@ -46,9 +46,8 @@
 #include "logo_rgb24_wvga_portrait.h"
 #endif
 #ifdef CONFIG_MACH_WAVE
-#include <asm/mach-types.h>
-#include "s8500-logo.h"
-#include "s8530-logo.h"
+#include <linux/swap.h>
+#include <plat/regs-fb.h>
 #endif
 #include <mach/regs-clock.h>
 #include "s3cfb.h"
@@ -112,6 +111,86 @@ static unsigned int bootloaderfb;
 module_param_named(bootloaderfb, bootloaderfb, uint, 0444);
 MODULE_PARM_DESC(bootloaderfb, "Address of booting logo image in Bootloader");
 
+#ifdef CONFIG_MACH_WAVE
+extern phys_addr_t wave_bootfb_phys;
+extern unsigned long wave_bootfb_size;
+
+static struct {
+	struct s3cfb_global *ctrl;
+	int win;
+	u32 line, width, height;
+} bootfb = { .win = -1 };
+
+static void __init s3cfb_find_bootfb(struct s3cfb_global *ctrl)
+{
+	u32 wincon = 0, size, addr;
+	int w;
+
+	if (!wave_bootfb_size)
+		return;
+	for (w = 4; w >= 0; w--) {
+		wincon = readl(ctrl->regs + S3C_WINCON(w));
+		if (wincon & S3C_WINCON_ENWIN_ENABLE)
+			break;
+	}
+	if (w < 0 || ((wincon >> 2) & 0xf) != 5)
+		return;
+	addr = readl(ctrl->regs + ((wincon & S3C_WINCON_BUFSEL_1) ?
+			S3C_VIDADDR_START1(w) : S3C_VIDADDR_START0(w)));
+	size = readl(ctrl->regs + S3C_VIDADDR_SIZE(w));
+	bootfb.width = (size & 0x1fff) / 2;
+	bootfb.line = (size & 0x1fff) + ((size >> 13) & 0x1fff);
+	bootfb.height = ((readl(ctrl->regs + S3C_VIDTCON2) >> 11) & 0x7ff) + 1;
+	if (addr != wave_bootfb_phys ||
+	    bootfb.line * bootfb.height > wave_bootfb_size) {
+		pr_info("s3cfb: bootloader screen at 0x%08x, not kept\n", addr);
+		return;
+	}
+	bootfb.ctrl = ctrl;
+	bootfb.win = w;
+}
+
+static void __init s3cfb_copy_bootfb(struct fb_info *fb)
+{
+	struct s3cfb_global *ctrl = bootfb.ctrl;
+	unsigned long pfn;
+	u32 x, y, w, h;
+
+	if (bootfb.win >= 0 && fb->var.bits_per_pixel == 32) {
+		w = min(bootfb.width, fb->var.xres);
+		h = min(bootfb.height, fb->var.yres);
+		for (y = 0; y < h; y++) {
+			const u16 *src = phys_to_virt(wave_bootfb_phys + y * bootfb.line);
+			u32 *dst = (u32 *)(fb->screen_base + y * fb->fix.line_length);
+
+			for (x = 0; x < w; x++) {
+				u32 p = src[x];
+				u32 r = (p >> 11) & 0x1f, g = (p >> 5) & 0x3f, b = p & 0x1f;
+
+				dst[x] = ((r << 3 | r >> 2) << 16) |
+					 ((g << 2 | g >> 4) << 8) | (b << 3 | b >> 2);
+			}
+		}
+	}
+	if (bootfb.win >= 0 && bootfb.win != to_fb_plat(ctrl->dev)->default_win)
+		s3cfb_window_off(ctrl, bootfb.win);
+	bootfb.win = -1;
+
+	if (!wave_bootfb_size)
+		return;
+	for (pfn = PFN_DOWN(wave_bootfb_phys);
+	     pfn < PFN_DOWN(wave_bootfb_phys + wave_bootfb_size); pfn++) {
+		struct page *page = pfn_to_page(pfn);
+
+		ClearPageReserved(page);
+		init_page_count(page);
+		__free_page(page);
+		totalram_pages++;
+	}
+	wave_bootfb_size = 0;
+}
+#endif
+
 #ifndef CONFIG_FRAMEBUFFER_CONSOLE
 
 #if defined(CONFIG_FB_S3C_LVDS)
@@ -170,10 +249,7 @@ static int __init s3cfb_draw_logo(struct fb_info *fb)
 #endif
 
 #if defined(CONFIG_MACH_WAVE)
-	if(machine_is_wave2())
-		memcpy(fb->screen_base, S8530_LOGO_RGB24, fb->var.yres * fb->fix.line_length);
-	else
-		memcpy(fb->screen_base, S8500_LOGO_RGB24, fb->var.yres * fb->fix.line_length);
+	s3cfb_copy_bootfb(fb);
 #else
 	if (readl(S5P_INFORM5)) //LPM_CHARGING mode
 		memcpy(fb->screen_base, charging, fb->var.yres * fb->fix.line_length);
@@ -1176,6 +1252,9 @@ static int __init s3cfb_probe(struct platform_device *pdev)
 		goto err_mem;
 	}
 
+#ifdef CONFIG_MACH_WAVE
+	s3cfb_find_bootfb(fbdev);
+#endif
 	s3cfb_set_vsync_interrupt(fbdev, 1);
 	s3cfb_set_global_interrupt(fbdev, 1);
 	s3cfb_init_global(fbdev);
