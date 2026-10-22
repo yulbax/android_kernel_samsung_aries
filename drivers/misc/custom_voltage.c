@@ -11,6 +11,8 @@
 #include <linux/device.h>
 #include <linux/miscdevice.h>
 #include <linux/slab.h>
+#include <linux/string.h>
+#include <linux/kernel.h>
 
 #define CUSTOMVOLTAGE_VERSION 1
 
@@ -28,6 +30,31 @@ static unsigned long * int_voltages = NULL;
 static unsigned long * freqs = NULL;
 static unsigned long max_voltages[2] = {0, 0};
 
+#define MIN_VOLTAGE 750000
+#define MAX_FREQS 16
+
+static int parse_voltages(const char * buf, unsigned long * voltages, unsigned long max)
+{
+    unsigned long parsed[MAX_FREQS];
+    const char * p = buf;
+    char * end;
+    int i;
+
+    for (i = 0; i < num_freqs; i++) {
+	p = skip_spaces(p);
+	parsed[i] = simple_strtoul(p, &end, 10) * 1000;
+	if (end == p || parsed[i] < MIN_VOLTAGE || parsed[i] > max)
+	    return -EINVAL;
+	p = end;
+    }
+    if (*skip_spaces(p))
+	return -EINVAL;
+
+    memcpy(voltages, parsed, num_freqs * sizeof(*parsed));
+
+    return 0;
+}
+
 ssize_t customvoltage_armvolt_read(struct device * dev, struct device_attribute * attr, char * buf)
 {
     int i, j = 0;
@@ -43,37 +70,10 @@ EXPORT_SYMBOL(customvoltage_armvolt_read);
 
 ssize_t customvoltage_armvolt_write(struct device * dev, struct device_attribute * attr, const char * buf, size_t size)
 {
-    int i = 0, j = 0, next_freq = 0;
-    unsigned long voltage;
+    int ret = parse_voltages(buf, arm_voltages, max_voltages[0]);
 
-    char buffer[20];
-
-    while (1)
-	{
-	    buffer[j] = buf[i];
-
-	    i++;
-	    j++;
-
-	    if (buf[i] == ' ' || buf[i] == '\0')
-		{
-		    buffer[j] = '\0';
-
-		    if (sscanf(buffer, "%lu", &voltage) == 1)
-			{
-			    arm_voltages[next_freq] = voltage * 1000;
-		
-			    next_freq++;
-			}
-
-		    if (buf[i] == '\0' || next_freq > num_freqs)
-			{
-			    break;
-			}
-
-		    j = 0;
-		}
-	}
+    if (ret)
+	return ret;
 
     customvoltage_updatearmvolt(arm_voltages);
 
@@ -95,37 +95,10 @@ static ssize_t customvoltage_intvolt_read(struct device * dev, struct device_att
 
 static ssize_t customvoltage_intvolt_write(struct device * dev, struct device_attribute * attr, const char * buf, size_t size)
 {
-    int i = 0, j = 0, next_freq = 0;
-    unsigned long voltage;
+    int ret = parse_voltages(buf, int_voltages, max_voltages[1]);
 
-    char buffer[20];
-
-    while (1)
-	{
-	    buffer[j] = buf[i];
-
-	    i++;
-	    j++;
-
-	    if (buf[i] == ' ' || buf[i] == '\0')
-		{
-		    buffer[j] = '\0';
-
-		    if (sscanf(buffer, "%lu", &voltage) == 1)
-			{
-			    int_voltages[next_freq] = voltage * 1000;
-		
-			    next_freq++;
-			}
-
-		    if (buf[i] == '\0' || next_freq > num_freqs)
-			{
-			    break;
-			}
-
-		    j = 0;
-		}
-	}
+    if (ret)
+	return ret;
 
     customvoltage_updateintvolt(int_voltages);
 
@@ -175,10 +148,10 @@ static ssize_t customvoltage_version(struct device * dev, struct device_attribut
     return sprintf(buf, "%u\n", CUSTOMVOLTAGE_VERSION);
 }
 
-static DEVICE_ATTR(arm_volt, S_IRUGO | S_IWUGO, customvoltage_armvolt_read, customvoltage_armvolt_write);
-static DEVICE_ATTR(int_volt, S_IRUGO | S_IWUGO, customvoltage_intvolt_read, customvoltage_intvolt_write);
-static DEVICE_ATTR(max_arm_volt, S_IRUGO | S_IWUGO, customvoltage_maxarmvolt_read, customvoltage_maxarmvolt_write);
-static DEVICE_ATTR(max_int_volt, S_IRUGO | S_IWUGO, customvoltage_maxintvolt_read, customvoltage_maxintvolt_write);
+static DEVICE_ATTR(arm_volt, S_IRUGO | S_IWUSR | S_IWGRP, customvoltage_armvolt_read, customvoltage_armvolt_write);
+static DEVICE_ATTR(int_volt, S_IRUGO | S_IWUSR | S_IWGRP, customvoltage_intvolt_read, customvoltage_intvolt_write);
+static DEVICE_ATTR(max_arm_volt, S_IRUGO | S_IWUSR, customvoltage_maxarmvolt_read, customvoltage_maxarmvolt_write);
+static DEVICE_ATTR(max_int_volt, S_IRUGO | S_IWUSR, customvoltage_maxintvolt_read, customvoltage_maxintvolt_write);
 static DEVICE_ATTR(version, S_IRUGO , customvoltage_version, NULL);
 
 static struct attribute *customvoltage_attributes[] = 
@@ -223,7 +196,7 @@ static int __init customvoltage_init(void)
 	    pr_err("Failed to create sysfs group for device (%s)!\n", customvoltage_device.name);
 	}
 
-    num_freqs = customvoltage_numfreqs();
+    num_freqs = min(customvoltage_numfreqs(), MAX_FREQS);
 
     arm_voltages = kzalloc(num_freqs * sizeof(unsigned long), GFP_KERNEL);
     int_voltages = kzalloc(num_freqs * sizeof(unsigned long), GFP_KERNEL);
