@@ -153,6 +153,12 @@ static int s3c_jpeg_open(struct inode *inode, struct file *file)
 		return FALSE;
 	}
 
+	if (!instanceNo && s5p_media_get(S5P_MDEV_JPEG, 0)) {
+		unlock_jpg_mutex();
+		kfree(jpg_reg_ctx);
+		return -ENOMEM;
+	}
+
 	instanceNo++;
 
 	/* Initialize the limits of the driver */
@@ -190,6 +196,8 @@ static int s3c_jpeg_release(struct inode *inode, struct file *file)
 
 	if ((--instanceNo) < 0)
 		instanceNo = 0;
+	else if (!instanceNo)
+		s5p_media_put(S5P_MDEV_JPEG, 0);
 
 	unlock_jpg_mutex();
 	kfree(jpg_reg_ctx);

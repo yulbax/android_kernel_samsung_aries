@@ -779,7 +779,7 @@ int mfc_load_firmware(const unsigned char *data, size_t size)
 
 	invalidate_kernel_vmap_range((void *)data, size);
 	memcpy((void *)fw_virbuf, data, size);
-	flush_kernel_vmap_range((void *)fw_virbuf, size);
+	dmac_flush_range((void *)fw_virbuf, (void *)fw_virbuf + MFC_FW_MAX_SIZE);
 
 	mfc_debug("mfc_load_firmware : MFC F/W Loading Stop.................(fw_virbuf: 0x%08x)\n", fw_virbuf);
 
