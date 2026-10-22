@@ -121,7 +121,8 @@ extern int __get_user_4(void *);
 #define get_user(x,p)							\
 	({								\
 		unsigned long __limit = current_thread_info()->addr_limit - 1; \
-		register const typeof(*(p)) __user *__p asm("r0") = (p);\
+		const typeof(*(p)) __user *__tmp_p = (p);		\
+		register const typeof(*(p)) __user *__p asm("r0") = __tmp_p; \
 		register unsigned long __r2 asm("r2");			\
 		register unsigned long __l asm("r1") = __limit;		\
 		register int __e asm("r0");				\
@@ -158,8 +159,10 @@ extern int __put_user_8(void *, unsigned long long);
 #define put_user(x,p)							\
 	({								\
 		unsigned long __limit = current_thread_info()->addr_limit - 1; \
-		register const typeof(*(p)) __r2 asm("r2") = (x);	\
-		register const typeof(*(p)) __user *__p asm("r0") = (p);\
+		typeof(*(p)) __tmp_x = (x);				\
+		const typeof(*(p)) __user *__tmp_p = (p);		\
+		register typeof(*(p)) __r2 asm("r2") = __tmp_x;	\
+		register const typeof(*(p)) __user *__p asm("r0") = __tmp_p; \
 		register unsigned long __l asm("r1") = __limit;		\
 		register int __e asm("r0");				\
 		switch (sizeof(*(__p))) {				\

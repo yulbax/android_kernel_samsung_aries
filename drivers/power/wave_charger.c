@@ -72,6 +72,7 @@ enum {
 #define TOTAL_RECHARGING_TIME		(90 * 60)	/* 1.5 hours */
 
 #define RECHARGE_COND_VOLTAGE		4130000
+#define TOPOFF_MIN_SOC			90
 #define RECHARGE_COND_TIME		(30 * 1000)	/* 30 seconds */
 
 #define FAST_POLL			(1 * 60)
@@ -130,6 +131,7 @@ struct chg_data {
 static bool disable_charger;
 static bool lpm_charging_mode;
 static bool batt_full_interrupt;
+static bool batt_soc_from_ril;
 
 static char *supply_list[] = {
 	"battery",
@@ -633,6 +635,7 @@ static ssize_t s3c_bat_store_attrs(struct device *dev, struct device_attribute *
 	case BATT_SOC:
 		if (sscanf(buf, "%d\n", &x) == 1) {
 			chg->bat_info.batt_soc = x;
+			batt_soc_from_ril = true;
 			ret = count;
 		}
 		break;
@@ -701,7 +704,11 @@ static irqreturn_t max8998_int_work_func(int irq, void *max8998_chg)
 	if (ret < 0)
 		goto err;
 
-	if ((data & 0x4) || (ret != 0)) {
+	if ((data & 0x4) && batt_soc_from_ril &&
+			chg->bat_info.batt_soc < TOPOFF_MIN_SOC) {
+		pr_info("%s : top-off at %d%%, not full\n", __func__,
+			chg->bat_info.batt_soc);
+	} else if ((data & 0x4) || (ret != 0)) {
 		pr_info("%s : pmic battery full interrupt\n", __func__);
 		batt_full_interrupt = 1; // we will overwrite it from RIL after sending packet to modem
 		chg->set_batt_full = 1;

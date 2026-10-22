@@ -162,6 +162,11 @@ static int lowmem_shrink(struct shrinker *s, struct shrink_control *sc)
 	int other_file = global_page_state(NR_FILE_PAGES) -
 						global_page_state(NR_SHMEM);
 
+#ifdef CONFIG_CMA
+	if (allocflags_to_migratetype(sc->gfp_mask) != MIGRATE_MOVABLE)
+		other_free -= global_page_state(NR_FREE_CMA_PAGES);
+#endif
+
 	/*
 	 * If we already have a death outstanding, then
 	 * bail out right away; indicating to vmscan

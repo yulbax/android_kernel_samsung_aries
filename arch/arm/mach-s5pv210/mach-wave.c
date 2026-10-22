@@ -13,6 +13,7 @@
 #include <linux/kernel.h>
 #include <linux/types.h>
 #include <linux/init.h>
+#include <linux/memblock.h>
 #include <linux/serial_core.h>
 #include <linux/gpio.h>
 #include <linux/gpio_event.h>
@@ -299,10 +300,10 @@ static struct s3cfb_lcd s6e63m0 = {
 	.freq = 60,
 
 	.timing = {
-		.h_fp = 16,
-		.h_bp = 16,
+		.h_fp = 28,
+		.h_bp = 28,
 		.h_sw = 2,
-		.v_fp = 28,
+		.v_fp = 58,
 		.v_fpe = 1,
 		.v_bp = 1,
 		.v_bpe = 1,
@@ -433,7 +434,7 @@ static struct regulator_consumer_supply ldo3_consumer[] = {
 };
 
 static struct regulator_consumer_supply ldo5_consumer[] = {
-	REGULATOR_SUPPLY("vmmc", NULL),
+	REGULATOR_SUPPLY("vmmc", "s3c-sdhci.2"),
 };
 
 static struct regulator_consumer_supply ldo7_consumer[] = {
@@ -533,6 +534,8 @@ static struct regulator_init_data wave_ldo5_data = {
 		.min_uV		= 2800000,
 		.max_uV		= 2800000,
 		.apply_uV	= 1,
+		.always_on	= 1,
+		.boot_on	= 1,
 		.valid_ops_mask = REGULATOR_CHANGE_STATUS,
 		.state_mem	= {
 			.disabled = 1,
@@ -4363,6 +4366,23 @@ static void check_bigmem(void) {
 	}
 }
 
+#define WAVE_BOOTFB_PHYS	0x4FA00000
+#define WAVE_BOOTFB_SIZE	PAGE_ALIGN(480 * 800 * 2)
+
+phys_addr_t wave_bootfb_phys;
+unsigned long wave_bootfb_size;
+
+static void __init wave_reserve_bootfb(void)
+{
+	if (!memblock_is_region_memory(WAVE_BOOTFB_PHYS, WAVE_BOOTFB_SIZE) ||
+	    memblock_is_region_reserved(WAVE_BOOTFB_PHYS, WAVE_BOOTFB_SIZE))
+		return;
+	if (memblock_reserve(WAVE_BOOTFB_PHYS, WAVE_BOOTFB_SIZE))
+		return;
+	wave_bootfb_phys = WAVE_BOOTFB_PHYS;
+	wave_bootfb_size = WAVE_BOOTFB_SIZE;
+}
+
 static void __init wave_map_io(void)
 {
 	s5p_init_io(NULL, 0, S5P_VA_CHIPID);
@@ -4373,6 +4393,7 @@ static void __init wave_map_io(void)
 		s5p_set_timer_source(S5P_PWM3, S5P_PWM4);
 	#endif
 	check_bigmem();
+	wave_reserve_bootfb();
 	s5p_reserve_bootmem(wave_media_devs,
 		ARRAY_SIZE(wave_media_devs), S5P_RANGE_MFC);
 #ifdef CONFIG_MTD_ONENAND
@@ -4390,14 +4411,13 @@ static void __init wave_fixup(struct machine_desc *desc,
 		struct meminfo *mi)
 {
 	mi->bank[0].start = S5PV210_PA_SDRAM;
-	mi->bank[0].size = 80 * SZ_1M;
+	mi->bank[0].size = 79 * SZ_1M;
 
 	mi->bank[1].start = 0x40000000;
-	/* 1M-4K for ram_console buffer */
 	mi->bank[1].size = 255 * SZ_1M;
 	mi->nr_banks = 2;
 
-	ram_console_start = mi->bank[1].start + mi->bank[1].size;
+	ram_console_start = mi->bank[0].start + mi->bank[0].size;
 	ram_console_size = SZ_1M - SZ_4K; //4K for some shared area
 	pm_debug_scratchpad = ram_console_start + ram_console_size;
 }
