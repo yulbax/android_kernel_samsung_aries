@@ -24,6 +24,8 @@
  *
  ******************************************************************************/
 
+#include <linux/delay.h>
+
 #include "services_headers.h"
 #include "buffer_manager.h"
 #include "pvr_bridge_km.h"
@@ -691,7 +693,7 @@ PVRSRV_ERROR IMG_CALLCONV PollForValueKM (volatile IMG_UINT32*	pui32LinMemAddr,
 			
 			if (bAllowPreemption)
 			{
-				OSSleepms(ui32PollPeriodus / 1000);
+				usleep_range(50, 100);
 			}
 			else
 			{
