@@ -72,6 +72,11 @@ config PVR_ACTIVE_POWER_LATENCY_MS
 	depends on PVR_ACTIVE_POWER_MANAGEMENT
 	default 100
 
+config PVR_MMU_MAKE_READWRITE_ON_DEMAND
+	bool "Write-protect SGX page tables in the kernel mapping"
+	depends on PVR_SGX
+	default y
+
 config PVR_SGX_LOW_LATENCY_SCHEDULING
 	bool "Enable low-latency scheduling"
 	depends on PVR_SGX
