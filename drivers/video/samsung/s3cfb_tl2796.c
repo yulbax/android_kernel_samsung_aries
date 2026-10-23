@@ -78,6 +78,7 @@ backlight_level_t backlight_level = BACKLIGHT_LEVEL_OFF;
 struct s5p_lcd{
 	int ldi_enable;
 	int bl;
+	int acl;
 	const struct tl2796_gamma_adj_points *gamma_adj_points;
 	struct tl2796_gamma_reg_offsets gamma_reg_offsets;
 	u32 color_mult[3];
@@ -412,9 +413,48 @@ static void s6e63m0_panel_send_sequence(struct s5p_lcd *lcd,
 #endif
 }
 
+static const u16 s6e63m0_SEQ_DISPLAY_ON[] = {
+	0x029,
+	ENDDEF, 0x0000
+};
+
+static int tl2796_level(struct s5p_lcd *lcd)
+{
+	return lcd->bl * lcd->data->gamma_levels_size / 256;
+}
+
+static void tl2796_update_level(struct s5p_lcd *lcd)
+{
+	struct s5p_panel_data *pdata = lcd->data;
+	int level = tl2796_level(lcd);
+	int acl = min(level, (int)ARRAY_SIZE(pdata->seq_acl) - 1);
+	u16 gamma_regs[27];
+	int i;
+
+	if (acl != lcd->acl && pdata->seq_acl[acl]) {
+		s6e63m0_panel_send_sequence(lcd, pdata->seq_acl[acl]);
+		lcd->acl = acl;
+	}
+
+	gamma_regs[0] = 0x0FA;
+	gamma_regs[1] = 0x102;
+	for (i = 0; i < 21; i++)
+		gamma_regs[2 + i] = 0x100 | pdata->gamma_levels[level][i];
+	gamma_regs[23] = 0x0FA;
+	gamma_regs[24] = 0x103;
+	gamma_regs[25] = ENDDEF;
+	gamma_regs[26] = 0x0000;
+	s6e63m0_panel_send_sequence(lcd, gamma_regs);
+}
+
 static void update_brightness(struct s5p_lcd *lcd)
 {
 	u16 gamma_regs[27];
+
+	if (lcd->data->gamma_levels) {
+		tl2796_update_level(lcd);
+		return;
+	}
 
 	gamma_regs[0] = 0x0FA;
 	gamma_regs[1] = 0x102;
@@ -433,6 +473,17 @@ static void tl2796_ldi_enable(struct s5p_lcd *lcd)
 	struct s5p_panel_data *pdata = lcd->data;
 
 	mutex_lock(&lcd->lock);
+
+	if (pdata->gamma_levels) {
+		s6e63m0_panel_send_sequence(lcd, pdata->seq_display_set);
+		s6e63m0_panel_send_sequence(lcd, pdata->seq_etc_set);
+		lcd->acl = -1;
+		update_brightness(lcd);
+		s6e63m0_panel_send_sequence(lcd, s6e63m0_SEQ_DISPLAY_ON);
+		lcd->ldi_enable = 1;
+		mutex_unlock(&lcd->lock);
+		return;
+	}
 
 	s6e63m0_panel_send_sequence(lcd, pdata->seq_display_set);
 	update_brightness(lcd);
@@ -1235,7 +1286,7 @@ static int __devinit tl2796_probe(struct spi_device *spi)
 	}
 	lcd->data = (struct s5p_panel_data *)spi->dev.platform_data;
 
-	if (!lcd->data->gamma_table || !lcd->data->seq_display_set ||
+	if (!(lcd->data->gamma_table || lcd->data->gamma_levels) || !lcd->data->seq_display_set ||
 		!lcd->data->seq_etc_set || !lcd->data->standby_on ||
 		!lcd->data->standby_off) {
 		dev_err(lcd->dev, "Invalid platform data\n");
@@ -1250,7 +1301,10 @@ static int __devinit tl2796_probe(struct spi_device *spi)
 #endif
 
 	spi_set_drvdata(spi, lcd);
-	tl2796_read_mtp_info(lcd);
+	if (lcd->data->gamma_levels)
+		lcd->bl = (2 * lcd->data->gamma_level_boot + 1) * 128 / lcd->data->gamma_levels_size;
+	else
+		tl2796_read_mtp_info(lcd);
 
 	lcd->bl_dev = backlight_device_register("s5p_bl",
 			&spi->dev, lcd, &s5p_bl_ops, NULL);
@@ -1263,7 +1317,16 @@ static int __devinit tl2796_probe(struct spi_device *spi)
 	lcd->bl_dev->props.max_brightness = 255;
 	lcd->bl_dev->props.brightness = lcd->bl;
 
-	tl2796_ldi_enable(lcd);
+#ifdef CONFIG_MACH_WAVE
+	if (lcd->data->gamma_levels && s3cfb_bootloader_panel_on) {
+		mutex_lock(&lcd->lock);
+		lcd->acl = -1;
+		update_brightness(lcd);
+		lcd->ldi_enable = 1;
+		mutex_unlock(&lcd->lock);
+	} else
+#endif
+		tl2796_ldi_enable(lcd);
 #ifdef CONFIG_HAS_EARLYSUSPEND
 	lcd->early_suspend.suspend = tl2796_early_suspend;
 	lcd->early_suspend.resume = tl2796_late_resume;

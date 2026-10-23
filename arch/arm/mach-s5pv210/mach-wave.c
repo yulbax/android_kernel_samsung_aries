@@ -4671,6 +4671,7 @@ static void __init wave_machine_init(void)
 	/* panel */
 #ifdef CONFIG_FB_S3C_TL2796
 	if(machine_is_wave()) {
+		wave_tl2796_set_hwrev(HWREV);
 		spi_register_board_info(tl2796_spi_board_info, ARRAY_SIZE(tl2796_spi_board_info));
 		s3cfb_set_platdata(&tl2796_data);
 	}
