@@ -48,6 +48,7 @@
 #ifdef CONFIG_MACH_WAVE
 #include <linux/swap.h>
 #include <plat/regs-fb.h>
+#include <asm/mach-types.h>
 #endif
 #include <mach/regs-clock.h>
 #include "s3cfb.h"
@@ -121,6 +122,8 @@ static struct {
 	u32 line, width, height;
 } bootfb = { .win = -1 };
 
+bool s3cfb_bootloader_panel_on;
+
 static void __init s3cfb_find_bootfb(struct s3cfb_global *ctrl)
 {
 	u32 wincon = 0, size, addr;
@@ -148,6 +151,7 @@ static void __init s3cfb_find_bootfb(struct s3cfb_global *ctrl)
 	}
 	bootfb.ctrl = ctrl;
 	bootfb.win = w;
+	s3cfb_bootloader_panel_on = machine_is_wave();
 }
 
 static void __init s3cfb_copy_bootfb(struct fb_info *fb)
@@ -1313,9 +1317,11 @@ static int __init s3cfb_probe(struct platform_device *pdev)
 
 #ifdef CONFIG_MACH_WAVE
 	/* FIXME: ugly hack around for configuring display */
-	s3cfb_early_suspend(&fbdev->early_suspend);
-	msleep(200);
-	s3cfb_late_resume(&fbdev->early_suspend);
+	if (!s3cfb_bootloader_panel_on) {
+		s3cfb_early_suspend(&fbdev->early_suspend);
+		msleep(200);
+		s3cfb_late_resume(&fbdev->early_suspend);
+	}
 #endif
 
 	ret = device_create_file(&(pdev->dev), &dev_attr_win_power);
