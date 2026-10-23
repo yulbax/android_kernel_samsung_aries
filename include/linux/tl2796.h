@@ -62,14 +62,10 @@ struct s5p_panel_data {
 const struct gamma_entry *gamma_table;
 #endif
 	int gamma_table_size;
-
-	const u8 (*gamma_levels)[21];
-	int gamma_levels_size;
-	int gamma_level_boot;
-	const u16 *seq_acl[3];
 };
 
 extern bool s3cfb_bootloader_panel_on;
+void tl2796_boot_screen_done(void);
 
 enum {
 	BV_0   =          0,
