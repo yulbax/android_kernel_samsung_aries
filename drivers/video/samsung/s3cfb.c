@@ -49,6 +49,7 @@
 #include <linux/swap.h>
 #include <plat/regs-fb.h>
 #include <asm/mach-types.h>
+#include <linux/tl2796.h>
 #endif
 #include <mach/regs-clock.h>
 #include "s3cfb.h"
@@ -341,6 +342,11 @@ static int s3cfb_map_video_memory(struct fb_info *fb)
 
 	if (!fb->screen_base)
 		return -ENOMEM;
+
+#if defined(CONFIG_MACH_WAVE) && defined(CONFIG_FB_S3C_TL2796)
+	if (s3cfb_bootloader_panel_on && pdata && win->id != pdata->default_win)
+		tl2796_boot_screen_done();
+#endif
 
 	dev_info(fbdev->dev, "[fb%d] dma: 0x%08x, cpu: 0x%08x, "
 			 "size: 0x%08x\n", win->id,
