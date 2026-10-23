@@ -62,6 +62,8 @@ struct s5p_panel_data {
 const struct gamma_entry *gamma_table;
 #endif
 	int gamma_table_size;
+
+	const u16 *seq_acl[3];
 };
 
 extern bool s3cfb_bootloader_panel_on;

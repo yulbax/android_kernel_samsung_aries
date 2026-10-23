@@ -79,6 +79,7 @@ struct s5p_lcd{
 	int ldi_enable;
 	int bl;
 	bool mtp_pending;
+	int acl;
 	struct work_struct boot_screen_done;
 	const struct tl2796_gamma_adj_points *gamma_adj_points;
 	struct tl2796_gamma_reg_offsets gamma_reg_offsets;
@@ -414,9 +415,22 @@ static void s6e63m0_panel_send_sequence(struct s5p_lcd *lcd,
 #endif
 }
 
+static void update_acl(struct s5p_lcd *lcd)
+{
+	const u16 * const *seq = lcd->data->seq_acl;
+	int acl = min(lcd->bl * 10 / 256, 2);
+
+	if (acl != lcd->acl && seq[acl]) {
+		s6e63m0_panel_send_sequence(lcd, seq[acl]);
+		lcd->acl = acl;
+	}
+}
+
 static void update_brightness(struct s5p_lcd *lcd)
 {
 	u16 gamma_regs[27];
+
+	update_acl(lcd);
 
 	gamma_regs[0] = 0x0FA;
 	gamma_regs[1] = 0x102;
@@ -443,6 +457,7 @@ static void tl2796_ldi_enable(struct s5p_lcd *lcd)
 
 	mutex_lock(&lcd->lock);
 
+	lcd->acl = -1;
 	s6e63m0_panel_send_sequence(lcd, pdata->seq_display_set);
 	update_brightness(lcd);
 #ifdef CONFIG_FB_VOODOO
